@@ -8,6 +8,7 @@ app = Flask(__name__)
 
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 APPLE_WEBHOOK_SECRET = os.environ["APPLE_WEBHOOK_SECRET"]
+APP_ID = os.environ["APP_ID"]
 
 
 def verify_signature(raw_body: bytes, signature: str) -> bool:
@@ -35,10 +36,10 @@ def apple_webhook():
         return jsonify({"error": "Unauthorized"}), 401
 
     event = request.json
-    event_type = event.get("type", "")
     attrs = event.get("attributes", {})
     state = attrs.get("appVersionState") or attrs.get("state", "UNKNOWN")
     version = attrs.get("versionString") or attrs.get("version", "?")
+    review_submissions_url = f"https://appstoreconnect.apple.com/apps/{APP_ID}/distribution/reviewsubmissions"
 
     emoji_map = {
         "REJECTED": "🔴",
@@ -61,7 +62,6 @@ def apple_webhook():
             "fields": [
                 {"type": "mrkdwn", "text": f"*Estado:*\n`{state}`"},
                 {"type": "mrkdwn", "text": f"*Versión:*\n{version}"},
-                {"type": "mrkdwn", "text": f"*Evento:*\n{event_type}"},
             ],
         },
     ]
@@ -72,10 +72,16 @@ def apple_webhook():
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*Accion requerida:* revisa el motivo del rechazo en App Store Connect > Resolution Center.",
+                    "text": "*Accion requerida:* revisa el rechazo en Review Submissions de App Store Connect.",
                 },
             }
         )
+
+    button_text = (
+        "Revisar en App Store Connect"
+        if state in {"REJECTED", "METADATA_REJECTED", "DEVELOPER_ACTION_NEEDED"}
+        else "Abrir App Store Connect"
+    )
 
     blocks.append(
         {
@@ -83,8 +89,8 @@ def apple_webhook():
             "elements": [
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": "Abrir App Store Connect"},
-                    "url": "https://appstoreconnect.apple.com",
+                    "text": {"type": "plain_text", "text": button_text},
+                    "url": review_submissions_url,
                     "style": "danger" if "REJECTED" in state else "primary",
                 }
             ],
