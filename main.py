@@ -1,6 +1,4 @@
-import hmac, hashlib, json, os, urllib.request, urllib.error, html, re, time
-import jwt
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
+import hmac, hashlib, json, os, urllib.request
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 
@@ -10,62 +8,6 @@ app = Flask(__name__)
 
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 APPLE_WEBHOOK_SECRET = os.environ["APPLE_WEBHOOK_SECRET"]
-KEY_ID = os.environ["KEY_ID"]
-ISSUER_ID = os.environ["ISSUER_ID"]
-PRIVATE_KEY_B64 = os.environ["PRIVATE_KEY_B64"]  # contenido del .p8 en base64
-APP_ID = os.environ["APP_ID"]
-
-
-def get_jwt_token():
-    private_key_pem = __import__("base64").b64decode(PRIVATE_KEY_B64)
-    private_key = load_pem_private_key(private_key_pem, password=None)
-    payload = {
-        "iss": ISSUER_ID,
-        "iat": int(time.time()),
-        "exp": int(time.time()) + 1200,
-        "aud": "appstoreconnect-v1",
-    }
-    return jwt.encode(payload, private_key, algorithm="ES256", headers={"kid": KEY_ID})
-
-
-def apple_get(url):
-    token = get_jwt_token()
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    resp = urllib.request.urlopen(req)
-    return json.loads(resp.read().decode())
-
-
-def strip_html(text):
-    return re.sub(r"<[^>]+>", "", html.unescape(text or "")).strip()
-
-
-def get_review_message(app_version_id):
-    """Obtiene el mensaje del reviewer desde el Resolution Center"""
-    try:
-        # Este endpoint devuelve la info que nosotros enviamos a App Review.
-        url = f"https://api.appstoreconnect.apple.com/v1/appStoreVersions/{app_version_id}/appStoreReviewDetail"
-        data = apple_get(url)
-
-        notes = data.get("data", {}).get("attributes", {}).get("notes", "")
-        if notes:
-            return strip_html(notes)
-    except urllib.error.HTTPError as e:
-        if e.code == 401:
-            print(
-                "Error obteniendo review message: Apple API rechazo el JWT. "
-                "Verifica que KEY_ID corresponda exactamente al PRIVATE_KEY_B64 configurado."
-            )
-            return None
-        if e.code == 404:
-            print(
-                "Review detail no disponible para ese appStoreVersion id. "
-                "Si es una prueba manual, probablemente el id sea sintético."
-            )
-            return None
-        print(f"Error obteniendo review message: HTTP {e.code}")
-    except Exception as e:
-        print(f"Error obteniendo review message: {e}")
-    return None
 
 
 def verify_signature(raw_body: bytes, signature: str) -> bool:
@@ -124,25 +66,16 @@ def apple_webhook():
         },
     ]
 
-    # Intentar obtener el mensaje del reviewer
-    app_version_id = (
-        event.get("relationships", {})
-        .get("appStoreVersion", {})
-        .get("data", {})
-        .get("id")
-    )
-    if app_version_id:
-        review_message = get_review_message(app_version_id)
-        if review_message:
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*Mensaje de Apple:*\n```{review_message[:2900]}```",
-                    },
-                }
-            )
+    if state in {"REJECTED", "METADATA_REJECTED", "DEVELOPER_ACTION_NEEDED"}:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Accion requerida:* revisa el motivo del rechazo en App Store Connect > Resolution Center.",
+                },
+            }
+        )
 
     blocks.append(
         {
