@@ -1,7 +1,10 @@
-import hmac, hashlib, json, os, urllib.request, html, re, time
+import hmac, hashlib, json, os, urllib.request, urllib.error, html, re, time
 import jwt
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from dotenv import load_dotenv
 from flask import Flask, request, jsonify
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -39,14 +42,27 @@ def strip_html(text):
 def get_review_message(app_version_id):
     """Obtiene el mensaje del reviewer desde el Resolution Center"""
     try:
-        # 1. Obtener threads del Resolution Center
+        # Este endpoint devuelve la info que nosotros enviamos a App Review.
         url = f"https://api.appstoreconnect.apple.com/v1/appStoreVersions/{app_version_id}/appStoreReviewDetail"
         data = apple_get(url)
 
-        # 2. Obtener los review notes si existen
-        notes = data.get("data", {}).get("attributes", {}).get("reviewNotes", "")
+        notes = data.get("data", {}).get("attributes", {}).get("notes", "")
         if notes:
             return strip_html(notes)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            print(
+                "Error obteniendo review message: Apple API rechazo el JWT. "
+                "Verifica que KEY_ID corresponda exactamente al PRIVATE_KEY_B64 configurado."
+            )
+            return None
+        if e.code == 404:
+            print(
+                "Review detail no disponible para ese appStoreVersion id. "
+                "Si es una prueba manual, probablemente el id sea sintético."
+            )
+            return None
+        print(f"Error obteniendo review message: HTTP {e.code}")
     except Exception as e:
         print(f"Error obteniendo review message: {e}")
     return None
