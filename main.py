@@ -101,5 +101,10 @@ def apple_webhook():
     return jsonify({"ok": True}), 200
 
 
+@app.route("/health", methods=["GET", "HEAD"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
