@@ -1,4 +1,4 @@
-import base64, hmac, hashlib, json, logging, os, urllib.request
+import hmac, hashlib, json, logging, os, urllib.request
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 
@@ -15,10 +15,15 @@ APP_ID = os.environ["APP_ID"]
 
 
 def verify_signature(raw_body: bytes, signature: str) -> bool:
-    expected = base64.b64encode(
-        hmac.new(APPLE_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).digest()
-    ).decode()
-    return hmac.compare_digest(expected, signature or "")
+    # Apple sends: "hmacsha256=<hex_digest>"
+    prefix = "hmacsha256="
+    if not signature.startswith(prefix):
+        return False
+    received_hex = signature[len(prefix):]
+    expected_hex = hmac.new(
+        APPLE_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected_hex, received_hex)
 
 
 def post_to_slack(payload):
@@ -42,16 +47,12 @@ def apple_webhook():
         return jsonify({"error": "Unauthorized"}), 401
 
     event = request.json
-    log.info("Payload keys: %s", list(event.keys()) if event else "empty")
+    log.info("Payload: %s", json.dumps(event))
 
-    attrs = event.get("attributes", {})
-    if not attrs and "data" in event:
-        log.info("Found 'data' wrapper — reading attributes from event['data']")
-        attrs = event["data"].get("attributes", {})
-
-    state = attrs.get("appVersionState") or attrs.get("state", "UNKNOWN")
-    version = attrs.get("versionString") or attrs.get("version", "?")
-    log.info("State=%s version=%s", state, version)
+    data = event.get("data", {})
+    attrs = data.get("attributes", {})
+    state = attrs.get("newValue") or attrs.get("appVersionState") or attrs.get("state", "UNKNOWN")
+    log.info("State=%s", state)
     review_submissions_url = f"https://appstoreconnect.apple.com/apps/{APP_ID}/distribution/reviewsubmissions"
 
     emoji_map = {
@@ -74,7 +75,6 @@ def apple_webhook():
             "type": "section",
             "fields": [
                 {"type": "mrkdwn", "text": f"*Estado:*\n`{state}`"},
-                {"type": "mrkdwn", "text": f"*Versión:*\n{version}"},
             ],
         },
     ]
