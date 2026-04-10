@@ -1,8 +1,11 @@
-import hmac, hashlib, json, os, urllib.request
+import base64, hmac, hashlib, json, logging, os, urllib.request
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -12,9 +15,9 @@ APP_ID = os.environ["APP_ID"]
 
 
 def verify_signature(raw_body: bytes, signature: str) -> bool:
-    expected = hmac.new(
-        APPLE_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256
-    ).hexdigest()
+    expected = base64.b64encode(
+        hmac.new(APPLE_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).digest()
+    ).decode()
     return hmac.compare_digest(expected, signature or "")
 
 
@@ -32,13 +35,23 @@ def post_to_slack(payload):
 @app.route("/webhook", methods=["POST"])
 def apple_webhook():
     signature = request.headers.get("x-apple-signature", "")
+    log.info("Webhook received | signature_present=%s body_bytes=%d", bool(signature), len(request.data))
+
     if not verify_signature(request.data, signature):
+        log.warning("Signature verification failed | received=%s", signature[:20] + "..." if len(signature) > 20 else signature)
         return jsonify({"error": "Unauthorized"}), 401
 
     event = request.json
+    log.info("Payload keys: %s", list(event.keys()) if event else "empty")
+
     attrs = event.get("attributes", {})
+    if not attrs and "data" in event:
+        log.info("Found 'data' wrapper — reading attributes from event['data']")
+        attrs = event["data"].get("attributes", {})
+
     state = attrs.get("appVersionState") or attrs.get("state", "UNKNOWN")
     version = attrs.get("versionString") or attrs.get("version", "?")
+    log.info("State=%s version=%s", state, version)
     review_submissions_url = f"https://appstoreconnect.apple.com/apps/{APP_ID}/distribution/reviewsubmissions"
 
     emoji_map = {
@@ -97,7 +110,13 @@ def apple_webhook():
         }
     )
 
-    post_to_slack({"blocks": blocks})
+    try:
+        post_to_slack({"blocks": blocks})
+        log.info("Slack notification sent successfully")
+    except Exception as e:
+        log.error("Failed to send Slack notification: %s", e)
+        return jsonify({"error": "slack_error"}), 500
+
     return jsonify({"ok": True}), 200
 
 
