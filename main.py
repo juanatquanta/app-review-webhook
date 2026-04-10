@@ -1,4 +1,5 @@
 import hmac, hashlib, json, logging, os, urllib.request
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 
@@ -52,7 +53,9 @@ def apple_webhook():
     data = event.get("data", {})
     attrs = data.get("attributes", {})
     state = attrs.get("newValue") or attrs.get("appVersionState") or attrs.get("state", "UNKNOWN")
-    log.info("State=%s", state)
+    old_state = attrs.get("oldValue", "")
+    raw_ts = attrs.get("timestamp", "")
+    log.info("State=%s old_state=%s", state, old_state)
     review_submissions_url = f"https://appstoreconnect.apple.com/apps/{APP_ID}/distribution/reviewsubmissions"
 
     emoji_map = {
@@ -61,22 +64,33 @@ def apple_webhook():
         "WAITING_FOR_REVIEW": "🕐",
         "IN_REVIEW": "🔵",
         "APPROVED": "✅",
+        "READY_FOR_DISTRIBUTION": "✅",
         "READY_FOR_SALE": "✅",
         "DEVELOPER_ACTION_NEEDED": "⚠️",
+        "PENDING_DEVELOPER_RELEASE": "🔒",
+        "PENDING_APPLE_RELEASE": "⏳",
     }
     emoji = emoji_map.get(state, "⚪")
+
+    try:
+        ts_fmt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(timezone.utc).strftime("%b %d, %Y %H:%M UTC")
+    except Exception:
+        ts_fmt = raw_ts
+
+    fields = [
+        {"type": "mrkdwn", "text": f"*Estado nuevo:*\n{emoji} `{state}`"},
+    ]
+    if old_state:
+        fields.append({"type": "mrkdwn", "text": f"*Estado anterior:*\n`{old_state}`"})
+    if ts_fmt:
+        fields.append({"type": "mrkdwn", "text": f"*Fecha:*\n{ts_fmt}"})
 
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"{emoji} App Store Review Update"},
+            "text": {"type": "plain_text", "text": "App Store Review Update"},
         },
-        {
-            "type": "section",
-            "fields": [
-                {"type": "mrkdwn", "text": f"*Estado:*\n`{state}`"},
-            ],
-        },
+        {"type": "section", "fields": fields},
     ]
 
     if state in {"REJECTED", "METADATA_REJECTED", "DEVELOPER_ACTION_NEEDED"}:
@@ -85,7 +99,7 @@ def apple_webhook():
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "*Accion requerida:* revisa el rechazo en Review Submissions de App Store Connect.",
+                    "text": "⚠️ *Accion requerida:* revisa el rechazo en Review Submissions de App Store Connect.",
                 },
             }
         )
