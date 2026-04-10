@@ -52,13 +52,14 @@ def apple_webhook():
 
     data = event.get("data", {})
     attrs = data.get("attributes", {})
-    state = attrs.get("newValue") or attrs.get("appVersionState") or attrs.get("state", "UNKNOWN")
-    old_state = attrs.get("oldValue", "")
+    state = attrs.get("newValue") or attrs.get("newState") or attrs.get("appVersionState") or attrs.get("state", "UNKNOWN")
+    old_state = attrs.get("oldValue") or attrs.get("oldState") or ""
     raw_ts = attrs.get("timestamp", "")
     log.info("State=%s old_state=%s", state, old_state)
     review_submissions_url = f"https://appstoreconnect.apple.com/apps/{APP_ID}/distribution/reviewsubmissions"
 
     emoji_map = {
+        # App review states
         "REJECTED": "🔴",
         "METADATA_REJECTED": "🟠",
         "WAITING_FOR_REVIEW": "🕐",
@@ -69,8 +70,20 @@ def apple_webhook():
         "DEVELOPER_ACTION_NEEDED": "⚠️",
         "PENDING_DEVELOPER_RELEASE": "🔒",
         "PENDING_APPLE_RELEASE": "⏳",
+        # Build upload states
+        "COMPLETE": "✅",
+        "FAILED": "🔴",
+        "PROCESSING": "⚙️",
+        "UPLOADED": "📦",
     }
     emoji = emoji_map.get(state, "⚪")
+
+    event_type = data.get("type", "")
+    event_type_map = {
+        "appStoreVersionAppVersionStateUpdated": "App Review",
+        "buildUploadStateUpdated": "Build Upload",
+    }
+    event_label = event_type_map.get(event_type, event_type)
 
     try:
         ts_fmt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(timezone.utc).strftime("%b %d, %Y %H:%M UTC")
@@ -88,7 +101,7 @@ def apple_webhook():
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": "App Store Review Update"},
+            "text": {"type": "plain_text", "text": f"{event_label} Update"},
         },
         {"type": "section", "fields": fields},
     ]
